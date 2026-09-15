@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- 本工作台为本地单文件 HTML，数据存浏览器 localStorage，零外链 -->
+<!-- 本工作台为本地单文件 HTML，数据存浏览器 localStorage，核心功能零外链；仅「框选识别」文字识别需联网加载 OCR 模型（可离线仅裁剪为题图） -->
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
@@ -206,6 +206,29 @@
     .wrap{max-width:100%}
     .q{box-shadow:none;border:1px solid #ccc;break-inside:avoid}
   }
+
+  /* 框选识别（卷子抠图 + OCR） */
+  .crop-stage{position:relative;display:inline-block;max-width:100%;line-height:0;touch-action:none;-webkit-user-select:none;user-select:none}
+  .crop-stage img{display:block;max-width:100%;max-height:60vh;border-radius:8px}
+  .crop-sel{position:absolute;border:2px solid var(--brand);background:rgba(76,110,245,.14);box-sizing:border-box;cursor:move;display:none;box-shadow:0 0 0 9999px rgba(20,24,40,.28)}
+  .crop-sel .ch{position:absolute;width:16px;height:16px;background:#fff;border:2px solid var(--brand);border-radius:50%;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+  .crop-sel .ch.nw{left:-9px;top:-9px;cursor:nwse-resize}
+  .crop-sel .ch.ne{right:-9px;top:-9px;cursor:nesw-resize}
+  .crop-sel .ch.sw{left:-9px;bottom:-9px;cursor:nesw-resize}
+  .crop-sel .ch.se{right:-9px;bottom:-9px;cursor:nwse-resize}
+  .crop-hint{position:absolute;left:50%;top:10px;transform:translateX(-50%);color:#fff;font-size:12px;background:rgba(20,24,40,.55);padding:5px 12px;border-radius:999px;pointer-events:none;line-height:1.4;white-space:nowrap}
+  .crop-empty{width:100%;min-height:180px;border:2px dashed var(--line);border-radius:10px;display:flex;align-items:center;justify-content:center;color:var(--sub);font-size:13px;text-align:center;padding:16px}
+
+  /* 全屏看图（lightbox） */
+  .lb-mask{position:fixed;inset:0;background:rgba(15,18,30,.92);display:flex;align-items:center;justify-content:center;z-index:200;padding:18px}
+  .lb-img{max-width:100%;max-height:100%;object-fit:contain;border-radius:8px;box-shadow:0 10px 40px rgba(0,0,0,.5);-webkit-user-select:none;user-select:none;touch-action:none}
+  .lb-x{position:absolute;top:14px;right:14px;width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,.14);color:#fff;border:none;display:flex;align-items:center;justify-content:center;cursor:pointer}
+  .lb-x:hover{background:rgba(255,255,255,.26)}
+  .lb-nav{position:absolute;top:50%;transform:translateY(-50%);width:44px;height:44px;border-radius:50%;background:rgba(255,255,255,.14);color:#fff;border:none;display:flex;align-items:center;justify-content:center;cursor:pointer}
+  .lb-nav:hover{background:rgba(255,255,255,.26)}
+  .lb-prev{left:14px} .lb-next{right:14px}
+  .lb-count{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);color:#fff;font-size:13px;background:rgba(0,0,0,.4);padding:4px 12px;border-radius:999px}
+  @media (max-width:760px){ .lb-nav{width:38px;height:38px} }
 </style>
 </head>
 <body>
@@ -266,13 +289,15 @@
       <option value="todo">待掌握</option>
     </select>
     <span class="spacer"></span>
-    <button class="duebtn" id="dueBtn" data-act="due">ONLY仅看待复习</button>
+    <button class="duebtn" id="todayBtn" data-act="today">今日新增</button>
+    <button class="duebtn" id="dueBtn" data-act="due">仅看待复习</button>
   </div>
 
   <div id="list"></div>
 </div>
 
 <div id="modalHost"></div>
+<div id="lightboxHost"></div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -331,8 +356,8 @@ var GRADES = ['小学五年级'];
 
 var data = [];
 var trend = [];
-var state = { curSub:'全部', gradeFilter:'', kw:'', fKp:'', fStatus:'', dueOnly:false, trendRange:7,
-  editingId:null, pendingImages:[], reviewId:null, calDate:null, calSel:null, modal:'none' };
+var state = { curSub:'全部', gradeFilter:'', kw:'', fKp:'', fStatus:'', dueOnly:false, todayOnly:false, trendRange:7,
+  editingId:null, pendingImages:[], reviewId:null, calDate:null, calSel:null, modal:'none', _lb:null };
 
 function load(){
   try{
@@ -370,6 +395,7 @@ var SR = [1,2,4,7,15,30];
 function nextReviewTs(stage){ var d = SR[Math.min(stage, SR.length-1)]; return Date.now() + d*864e5; }
 function isDue(q){ return q.nextReview != null && q.nextReview <= Date.now(); }
 function fmtDate(ts){ var d = new Date(ts); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function isToday(ts){ if(ts==null) return false; return fmtDate(ts)===fmtDate(Date.now()); }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
 function scopeOf(){ return data.filter(function(q){ return (state.curSub==='全部'||q.subject===state.curSub) && (!state.gradeFilter||(q.grade||'')===state.gradeFilter); }); }
 function subjectsOf(){ return scopeOf(); }
@@ -380,6 +406,7 @@ function renderStats(){
   var all = scopeOf(), total = all.length;
   var done = all.filter(function(q){return q.mastered;}).length;
   var todo = total - done, due = all.filter(isDue).length;
+  var todayNew = all.filter(function(q){ return isToday(q.createdAt); }).length;
   document.getElementById('stats').innerHTML =
     '<div class="stat"><div class="n">'+total+'</div><div class="l">错题总数</div></div>'+
     '<div class="stat ok"><div class="n">'+done+'</div><div class="l">已掌握</div></div>'+
@@ -388,6 +415,7 @@ function renderStats(){
   // 提醒条
   var rm = document.getElementById('reminder');
   if(due>0){ rm.classList.add('show'); document.getElementById('reminderTxt').textContent = '今天有 '+due+' 道错题待复习'; }
+  else if(todayNew>0){ rm.classList.add('show'); document.getElementById('reminderTxt').textContent = '今天新增了 '+todayNew+' 道错题，点「今日新增」可立即检视复习'; }
   else { rm.classList.remove('show'); }
 }
 function renderKp(){
@@ -459,6 +487,7 @@ function renderList(){
     if(fst==='done' && !q.mastered) return false;
     if(fst==='todo' && q.mastered) return false;
     if(state.dueOnly && !isDue(q)) return false;
+    if(state.todayOnly && !isToday(q.createdAt)) return false;
     if(state.gradeFilter && (q.grade||'') !== state.gradeFilter) return false;
     if(state.calSel != null && !(q.nextReview >= state.calSel && q.nextReview < state.calSel + 864e5)) return false;
     if(kw){
@@ -485,7 +514,7 @@ function starRow(n){
   return s;
 }
 function qHtml(q){
-  var imgs = (q.images&&q.images.length) ? '<div class="q-imgs">'+q.images.map(function(s){return '<img src="'+s+'" onclick="window.open(this.src)" alt="题图">';}).join('')+'</div>' : '';
+  var imgs = (q.images&&q.images.length) ? '<div class="q-imgs">'+q.images.map(function(s){return '<img src="'+s+'" data-act="imgview" alt="题图">';}).join('')+'</div>' : '';
   var chips = '<span class="chip kp">'+esc(q.knowledge||'未分类')+'</span>'+
     (q.grade?'<span class="chip">'+esc(q.grade)+'</span>':'')+
     '<span class="chip diff">难度 '+('●'.repeat(q.difficulty))+'</span>'+
@@ -496,7 +525,7 @@ function qHtml(q){
     '<div class="q-main">'+
       '<div class="q-check '+(q.mastered?'on':'')+'" data-act="check">'+icon('check',13,'#fff')+'</div>'+
       '<div class="q-body" data-act="toggle">'+
-        '<div class="q-content">'+esc(q.content)+'</div>'+
+        '<div class="q-content">'+(q.content?esc(q.content):'<span style="color:var(--sub)">（图片题）</span>')+'</div>'+
         '<div class="q-meta">'+chips+'</div>'+
       '</div>'+
       '<div class="q-actions"><button class="mini" data-act="edit">编辑</button><button class="mini del" data-act="del">删除</button></div>'+
@@ -520,27 +549,32 @@ function openModal(html){ document.getElementById('modalHost').innerHTML = '<div
 
 /* 弹窗内部全部用 class="modal" 即可，禁止用 inline onclick 阻断冒泡（会卡死全局事件委托）。关闭逻辑统一交给 mask，且只有点到背景才关。 */
 
-function askCard(id){
+function askCard(id, draft){
   var edit = id!=null;
   var q = edit ? data.find(function(x){return x.id===id;}) : null;
   state.editingId = id;
-  state.pendingImages = q ? (q.images||[]).slice() : [];
-  var sub = q?q.subject:(state.curSub!=='全部'?state.curSub:SUBJECTS[0]);
-  var diff = q?q.difficulty:3;
+  var src = draft || q || {};
+  state.pendingImages = src.images ? src.images.slice() : (q ? (q.images||[]).slice() : []);
+  var sub = src.subject || (q?q.subject:(state.curSub!=='全部'?state.curSub:SUBJECTS[0]));
+  var diff = src.difficulty || (q?q.difficulty:3);
+  state._star = diff;
   var imgsPrev = state.pendingImages.map(function(s,i){ return '<div class="thumb"><img src="'+s+'"><button class="thumb-x" data-act="imgdel" data-i="'+i+'">×</button></div>'; }).join('');
   var html = '<div class="modal">'+
     '<h3>'+icon('edit',18,'var(--brand)')+(edit?'编辑错题':'添加错题')+'</h3>'+
     '<div class="row2"><div class="field"><label>科目 <span class="req">*</span></label><select id="cSub">'+
       SUBJECTS.map(function(s){return '<option'+(s===sub?' selected':'')+'>'+s+'</option>';}).join('')+'</select></div>'+
     '<div class="field"><label>年级</label><select id="cGrade"><option value="">（不选）</option>'+
-      GRADES.map(function(g){return '<option'+(g===(q?q.grade:'' )?' selected':'')+'>'+g+'</option>';}).join('')+
+      GRADES.map(function(g){return '<option'+(g===(src.grade||'' )?' selected':'')+'>'+g+'</option>';}).join('')+
       '</select></div></div>'+
-    '<div class="field"><label>题目 <span class="req">*</span></label><textarea id="cContent" placeholder="把题目内容粘贴或抄写进来">'+(q?esc(q.content):'')+'</textarea></div>'+
-    '<div class="row2"><div class="field"><label>我的错误答案</label><textarea id="cWrong" placeholder="当时写的错答">'+(q?esc(q.wrong):'')+'</textarea></div>'+
-    '<div class="field"><label>正确答案</label><textarea id="cRight" placeholder="标准答案 / 正确解法">'+(q?esc(q.right):'')+'</textarea></div></div>'+
-    '<div class="field"><label>错因分析</label><textarea id="cReason" placeholder="为什么错？概念不清 / 计算失误 / 审题偏差 …">'+(q?esc(q.reason):'')+'</textarea></div>'+
-    '<div class="row2"><div class="field"><label>知识点 <span class="req">*</span></label><input id="cKp" type="text" placeholder="如：分数加减 / 定语从句" value="'+(q?esc(q.knowledge):'')+'"></div>'+
-    '<div class="field"><label>学生（可选）</label><input id="cStu" type="text" placeholder="留空表示通用" value="'+(q?esc(q.student):'')+'"></div></div>'+
+    '<div class="field"><label>题目 <span class="req">*</span></label><textarea id="cContent" placeholder="填空即文字题；也可留空——用下面「框选题目」抠出图片作为题目">'+(esc(src.content||''))+'</textarea></div>'+
+    '<div class="field"><label>快速录入：拍照 / 上传卷子框选</label>'+
+      '<div class="img-drop"><button class="btn-soft iconbtn" type="button" data-act="cropOpen">'+icon('abc',15)+'拍照/上传卷子截图，框选题目自动识别</button>'+
+      '<span style="font-size:12px;color:var(--sub)">不用手打题目：上传整张卷子，框出题目区域即可自动抠图——直接用图片当题目，或识别成文字</span></div></div>'+
+    '<div class="row2"><div class="field"><label>我的错误答案</label><textarea id="cWrong" placeholder="当时写的错答">'+esc(src.wrong||'')+'</textarea></div>'+
+    '<div class="field"><label>正确答案</label><textarea id="cRight" placeholder="标准答案 / 正确解法">'+esc(src.right||'')+'</textarea></div></div>'+
+    '<div class="field"><label>错因分析</label><textarea id="cReason" placeholder="为什么错？概念不清 / 计算失误 / 审题偏差 …">'+esc(src.reason||'')+'</textarea></div>'+
+    '<div class="row2"><div class="field"><label>知识点 <span class="req">*</span></label><input id="cKp" type="text" placeholder="如：分数加减 / 定语从句" value="'+esc(src.knowledge||'')+'"></div>'+
+    '<div class="field"><label>学生（可选）</label><input id="cStu" type="text" placeholder="留空表示通用" value="'+esc(src.student||'')+'"></div></div>'+
     '<div class="field"><label>难度</label><div class="star-row" id="starRow">'+starRow(diff)+'</div></div>'+
     '<div class="field"><label>题目图片（可选 · 可粘贴截图 / 多选上传）</label>'+
       '<div class="img-drop"><button class="btn-ghost iconbtn" type="button" data-act="imgpick">'+icon('upload',15)+'选择图片</button>'+
@@ -556,15 +590,16 @@ function askCard(id){
 }
 
 function openReview(){
-  var due = scopeOf().filter(isDue);
-  if(!due.length){ toast('今天没有待复习的题，去添加或等复习时间到'); return; }
-  var q = due[Math.floor(Math.random()*due.length)];
+  var pool = scopeOf().filter(function(q){ return isDue(q) || isToday(q.createdAt); });
+  if(!pool.length){ toast('今天没有待复习或新上传的题，去添加或等复习时间到'); return; }
+  var q = pool[Math.floor(Math.random()*pool.length)];
   state.reviewId = q.id;
   var html = '<div class="modal"><h3>'+icon('dice',18,'var(--brand)')+'抽题复习</h3>'+
-    '<div class="rev-q">'+esc(q.content)+'</div>'+
+    '<div class="rev-q">'+(q.content?esc(q.content):'<span style="color:var(--sub)">（图片题，见下方图片）</span>')+'</div>'+
     '<div class="rev-meta"><span class="chip kp">'+esc(q.knowledge||'未分类')+'</span>'+
       (q.grade?'<span class="chip">'+esc(q.grade)+'</span>':'')+
       (q.student?'<span class="chip">'+esc(q.student)+'</span>':'')+'</div>'+
+    (q.images&&q.images.length?'<div class="q-imgs" style="margin:10px 0">'+q.images.map(function(s){return '<img src="'+s+'" data-act="imgview" alt="题图">';}).join('')+'</div>':'')+
     '<div class="rev-ans" id="revAns">'+
       '<div class="lab" style="font-size:12px;color:var(--sub);font-weight:700">我的错误答案</div><div class="v ans-wrong">'+esc(q.wrong||'（未填写）')+'</div>'+
       '<div class="lab" style="font-size:12px;color:var(--sub);font-weight:700;margin-top:10px">正确答案</div><div class="v ans-right">'+esc(q.right||'（未填写）')+'</div>'+
@@ -681,16 +716,227 @@ function doPrint(){
           (q.wrong?'<div style="color:#e5484d;margin:3px 0"><b>我的错答：</b>'+esc(q.wrong)+'</div>':'')+
           (q.right?'<div style="color:#2f9e6b;margin:3px 0"><b>正解：</b>'+esc(q.right)+'</div>':'')+
           (q.reason?'<div style="margin:3px 0"><b>错因：</b>'+esc(q.reason)+'</div>':'');
-        return '<div style="border:1px solid #ccc;border-radius:8px;padding:10px;margin-bottom:8px;break-inside:avoid">'+
-          '<div style="font-weight:700">'+esc(q.content)+'</div>'+
-          '<div style="font-size:12px;color:#8a90a2;margin:4px 0">'+(q.subject||'')+' · '+(q.grade||'')+(q.student?' · '+esc(q.student):'')+'</div>'+
-          ans + '</div>';
+      var pimgs = (q.images&&q.images.length) ? '<div style="margin:6px 0">'+q.images.map(function(s){ return '<img src="'+s+'" style="max-width:240px;max-height:300px;margin:0 8px 6px 0;border:1px solid #eee;border-radius:6px;vertical-align:top;object-fit:contain">'; }).join('')+'</div>' : '';
+      return '<div style="border:1px solid #ccc;border-radius:8px;padding:10px;margin-bottom:8px;break-inside:avoid">'+
+        '<div style="font-weight:700">'+(q.content?esc(q.content):'（图片题）')+'</div>'+
+        '<div style="font-size:12px;color:#8a90a2;margin:4px 0">'+(q.subject||'')+' · '+(q.grade||'')+(q.student?' · '+esc(q.student):'')+'</div>'+
+        pimgs + ans + '</div>';
       }).join('');
   }).join('');
   var w = window.open('', '_blank');
-  w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>错题清单</title><style>body{font-family:-apple-system,"PingFang SC",sans-serif;padding:24px;color:#1f2330}h1{font-size:20px}img{max-width:160px}</style></head><body><h1>错题清单</h1>'+rows+'</body></html>');
+  w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>错题清单</title><style>body{font-family:-apple-system,"PingFang SC",sans-serif;padding:24px;color:#1f2330}h1{font-size:20px}img{max-width:260px;height:auto}</style></head><body><h1>错题清单</h1>'+rows+'</body></html>');
   w.document.close(); w.focus(); setTimeout(function(){ w.print(); }, 300);
   closeModal();
+}
+
+/* ============ 框选识别（卷子抠图 + OCR） ============ */
+var cropSel = null, cropDrag = null, cropStart = null, cropTessReady = null;
+
+function readCardForm(){
+  if(!document.getElementById('cContent')) return null;
+  return {
+    subject: document.getElementById('cSub').value,
+    grade: document.getElementById('cGrade').value,
+    content: document.getElementById('cContent').value,
+    wrong: document.getElementById('cWrong').value,
+    right: document.getElementById('cRight').value,
+    reason: document.getElementById('cReason').value,
+    knowledge: document.getElementById('cKp').value,
+    student: document.getElementById('cStu').value,
+    difficulty: state._star || 3,
+    images: state.pendingImages.slice()
+  };
+}
+function restoreCard(){ askCard(state.editingId, state._cardDraft); }
+
+function openCrop(){
+  state._cardDraft = readCardForm() || { subject:'', grade:'', content:'', wrong:'', right:'', reason:'', knowledge:'', student:'', difficulty: state._star||3, images: state.pendingImages.slice() };
+  state.modal = 'crop';
+  var html = '<div class="modal" style="max-width:720px">'+
+    '<h3>'+icon('abc',18,'var(--brand)')+'框选题目（拍照 / 上传卷子）</h3>'+
+    '<div style="font-size:12px;color:var(--sub);margin:-4px 0 12px">上传整张卷子或截图，框出要录入的题目：自动抠成图片即可当题目（纯图片题），也可识别文字填进「题目」。</div>'+
+    '<div class="img-drop" style="margin-bottom:12px">'+
+      '<button class="btn-soft iconbtn" type="button" data-act="cropCamera">'+icon('upload',15)+'拍照</button>'+
+      '<button class="btn-ghost iconbtn" type="button" data-act="cropPick">'+icon('upload',15)+'从相册 / 文件选择</button>'+
+      '<input id="cropFile" type="file" accept="image/*" style="display:none">'+
+      '<input id="cropFileCam" type="file" accept="image/*" capture="environment" style="display:none">'+
+    '</div>'+
+    '<div class="crop-empty" id="cropEmpty">还没有图片，先「拍照」或「选择」卷子截图</div>'+
+    '<div id="cropWrap" style="display:none;text-align:center">'+
+      '<div class="crop-stage" id="cropStage">'+
+        '<img id="cropImg" alt="卷子">'+
+        '<div class="crop-sel" id="cropSel"><span class="ch nw" data-h="nw"></span><span class="ch ne" data-h="ne"></span><span class="ch sw" data-h="sw"></span><span class="ch se" data-h="se"></span></div>'+
+        '<div class="crop-hint" id="cropHint">拖动框选题目区域 · 可拖动四角调整</div>'+
+      '</div>'+
+      '<div style="margin-top:8px;font-size:12px;color:var(--sub)">提示：框选越贴合题目，识别越准</div>'+
+    '</div>'+
+    '<div class="field" style="margin-top:12px"><label>识别结果（可手动修改）</label>'+
+      '<textarea id="cropOcr" placeholder="点「识别题目文字」后，这里显示识别结果，可修正后再填入" style="min-height:72px"></textarea></div>'+
+    '<div id="cropStatus" style="font-size:12px;color:var(--warn);min-height:18px;margin-bottom:6px"></div>'+
+    '<div class="modal-acts">'+
+      '<button class="btn btn-ghost" data-act="cropCancel">取消</button>'+
+      '<button class="btn btn-soft" data-act="cropAsImg">用图片作为题目</button>'+
+      '<button class="btn btn-ghost" data-act="cropRecognize" id="cropRecBtn" disabled style="opacity:.5">识别题目文字</button>'+
+      '<button class="btn btn-primary" data-act="cropFill" id="cropFillBtn" disabled style="opacity:.5">填入并返回</button>'+
+    '</div>'+
+    '<div style="font-size:11px;color:var(--sub);margin-top:8px">框出题目后：① 直接「用图片作为题目」即可（纯图片题，无需文字）；② 或点「识别题目文字」把文字填进题目。文字识别需联网（首次会下载中文模型，约几十 MB）。</div>'+
+  '</div>';
+  openModal(html);
+  var m = document.getElementById('modalHost').querySelector('.mask');
+  if(m) m.setAttribute('data-act','cropMask');
+  state.modal = 'crop';
+  document.getElementById('cropFile').addEventListener('change', function(e){ cropOnFile(e); });
+  document.getElementById('cropFileCam').addEventListener('change', function(e){ cropOnFile(e); });
+  var stage = document.getElementById('cropStage');
+  stage.addEventListener('pointerdown', cropDown);
+  stage.addEventListener('pointermove', cropMove);
+  stage.addEventListener('pointerup', cropUp);
+  stage.addEventListener('pointercancel', cropUp);
+}
+
+function cropOnFile(e){
+  var f = e.target.files && e.target.files[0]; if(!f) return;
+  var fr = new FileReader();
+  fr.onload = function(){
+    var img = document.getElementById('cropImg');
+    img.onload = function(){ requestAnimationFrame(cropImgReady); };
+    img.src = fr.result;
+  };
+  fr.readAsDataURL(f);
+  e.target.value = '';
+}
+function cropImgReady(){
+  document.getElementById('cropEmpty').style.display = 'none';
+  document.getElementById('cropWrap').style.display = 'block';
+  var img = document.getElementById('cropImg');
+  var w = img.clientWidth, h = img.clientHeight;
+  if(!w || !h){ w = img.naturalWidth; h = img.naturalHeight; }
+  cropSel = { x:0, y:0, w:w, h:h };
+  drawSel();
+  var b = document.getElementById('cropRecBtn'); b.disabled = false; b.style.opacity = '1';
+}
+function drawSel(){
+  if(!cropSel) return;
+  var el = document.getElementById('cropSel');
+  el.style.display = 'block';
+  el.style.left = cropSel.x + 'px'; el.style.top = cropSel.y + 'px';
+  el.style.width = cropSel.w + 'px'; el.style.height = cropSel.h + 'px';
+}
+function cropDown(e){
+  if(!cropSel) return;
+  var r = document.getElementById('cropImg').getBoundingClientRect();
+  var px = e.clientX - r.left, py = e.clientY - r.top;
+  var h = e.target.getAttribute && e.target.getAttribute('data-h');
+  if(h){ cropDrag = 'resize:' + h; }
+  else if(e.target.id === 'cropSel' || (e.target.parentNode && e.target.parentNode.id === 'cropSel')){ cropDrag = 'move'; }
+  else { cropDrag = 'new'; cropSel = { x:px, y:py, w:0, h:0 }; }
+  cropStart = { x:px, y:py, sel:{ x:cropSel.x, y:cropSel.y, w:cropSel.w, h:cropSel.h } };
+  try{ document.getElementById('cropStage').setPointerCapture(e.pointerId); }catch(_){}
+  e.preventDefault();
+}
+function cropMove(e){
+  if(!cropDrag || !cropSel) return;
+  var r = document.getElementById('cropImg').getBoundingClientRect();
+  var px = Math.max(0, Math.min(r.width, e.clientX - r.left));
+  var py = Math.max(0, Math.min(r.height, e.clientY - r.top));
+  var s = cropSel;
+  if(cropDrag === 'new'){
+    s.x = Math.min(cropStart.x, px); s.y = Math.min(cropStart.y, py);
+    s.w = Math.abs(px - cropStart.x); s.h = Math.abs(py - cropStart.y);
+  } else if(cropDrag === 'move'){
+    var dx = px - cropStart.x, dy = py - cropStart.y;
+    s.x = Math.max(0, Math.min(r.width - cropStart.sel.w, cropStart.sel.x + dx));
+    s.y = Math.max(0, Math.min(r.height - cropStart.sel.h, cropStart.sel.y + dy));
+    s.w = cropStart.sel.w; s.h = cropStart.sel.h;
+  } else if(cropDrag.indexOf('resize') === 0){
+    var corner = cropDrag.split(':')[1];
+    var x0 = cropStart.sel.x, y0 = cropStart.sel.y, x1 = cropStart.sel.x + cropStart.sel.w, y1 = cropStart.sel.y + cropStart.sel.h;
+    if(corner.indexOf('w') >= 0) x0 = px; if(corner.indexOf('e') >= 0) x1 = px;
+    if(corner.indexOf('n') >= 0) y0 = py; if(corner.indexOf('s') >= 0) y1 = py;
+    s.x = Math.min(x0, x1); s.y = Math.min(y0, y1); s.w = Math.abs(x1 - x0); s.h = Math.abs(y1 - y0);
+  }
+  drawSel();
+  var hint = document.getElementById('cropHint'); if(hint) hint.style.display = 'none';
+}
+function cropUp(e){
+  cropDrag = null;
+  try{ document.getElementById('cropStage').releasePointerCapture(e.pointerId); }catch(_){}
+}
+function cropToCanvas(){
+  var img = document.getElementById('cropImg');
+  var sx = cropSel.x * (img.naturalWidth / img.clientWidth);
+  var sy = cropSel.y * (img.naturalHeight / img.clientHeight);
+  var sw = cropSel.w * (img.naturalWidth / img.clientWidth);
+  var sh = cropSel.h * (img.naturalHeight / img.clientHeight);
+  var cv = document.createElement('canvas');
+  cv.width = Math.max(1, Math.round(sw)); cv.height = Math.max(1, Math.round(sh));
+  cv.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, cv.width, cv.height);
+  return cv;
+}
+function cropToDataURL(cv){
+  var max = 1400;
+  if(cv.width <= max && cv.height <= max) return cv.toDataURL('image/jpeg', 0.85);
+  var r = Math.min(max / cv.width, max / cv.height);
+  var c2 = document.createElement('canvas'); c2.width = Math.round(cv.width * r); c2.height = Math.round(cv.height * r);
+  c2.getContext('2d').drawImage(cv, 0, 0, c2.width, c2.height);
+  return c2.toDataURL('image/jpeg', 0.85);
+}
+function cropAsImg(){
+  if(!cropSel) return;
+  var cv = cropToCanvas(); var url = cropToDataURL(cv);
+  state._cardDraft = state._cardDraft || {};
+  state._cardDraft.images = state._cardDraft.images || [];
+  if(state._cardDraft.images.length < 9) state._cardDraft.images.push(url);
+  toast('已裁剪为题图');
+  restoreCard();
+}
+function cropFill(){
+  var txt = (document.getElementById('cropOcr').value || '').trim();
+  if(!txt){ toast('还没有识别文字，先点「识别题目文字」'); return; }
+  var d = state._cardDraft || {};
+  var existing = (d.content || '').trim();
+  d.content = existing ? (existing + '\n\n' + txt) : txt;
+  restoreCard();
+  toast('已填入题目，可继续编辑');
+}
+function cleanOcr(t){
+  return t.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+$/gm, '').trim();
+}
+function loadTesseract(){
+  if(window.Tesseract) return Promise.resolve(window.Tesseract);
+  return new Promise(function(res, rej){
+    var s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+    s.onload = function(){ res(window.Tesseract); };
+    s.onerror = function(){ rej(new Error('OCR 引擎加载失败（需要联网）')); };
+    document.head.appendChild(s);
+  });
+}
+function cropRecognize(){
+  if(!cropSel || !cropSel.w || !cropSel.h) return;
+  var btn = document.getElementById('cropRecBtn'); btn.disabled = true;
+  var status = document.getElementById('cropStatus');
+  status.textContent = '正在准备识别引擎…';
+  loadTesseract().then(function(T){
+    status.textContent = '正在加载 / 下载中文识别模型…（首次较慢）';
+    return T.createWorker(['chi_sim', 'eng'], 1, { logger: function(m){
+      if(m && m.status === 'recognizing text' && status) status.textContent = '识别中… ' + Math.round((m.progress || 0) * 100) + '%';
+    }});
+  }).then(function(worker){
+    var cv = cropToCanvas();
+    return worker.recognize(cv).then(function(res){
+      return worker.terminate().then(function(){ return res; });
+    });
+  }).then(function(res){
+    var txt = cleanOcr((res && res.data ? res.data.text : (res && res.text) || '').trim());
+    document.getElementById('cropOcr').value = txt;
+    status.textContent = '识别完成，可在上方修改后「填入并返回」';
+    var fb = document.getElementById('cropFillBtn'); fb.disabled = false; fb.style.opacity = '1';
+  }).catch(function(err){
+    status.textContent = '识别失败：' + (err && err.message ? err.message : err) + '（可改用「仅裁剪为题图」）';
+  }).then(function(){
+    btn.disabled = false;
+  });
 }
 
 /* ============ 动作处理 ============ */
@@ -714,11 +960,22 @@ function handleAct(act, el){
   if(act==='add'){ askCard(null); return; }
   if(act==='savecard'){ saveCard(); return; }
   if(act==='imgpick'){ document.getElementById('cImg').click(); return; }
+  if(act==='cropOpen'){ openCrop(); return; }
+  if(act==='cropCamera'){ document.getElementById('cropFileCam').click(); return; }
+  if(act==='cropPick'){ document.getElementById('cropFile').click(); return; }
+  if(act==='cropRecognize'){ cropRecognize(); return; }
+  if(act==='cropAsImg'){ cropAsImg(); return; }
+  if(act==='cropFill'){ cropFill(); return; }
+  if(act==='cropCancel'){ restoreCard(); return; }
   if(act==='imgdel'){ state.pendingImages.splice(parseInt(el.getAttribute('data-i'),10),1); renderImgPrev(); return; }
   if(act==='setstar'){ state._star = parseInt(el.getAttribute('data-n'),10); document.getElementById('starRow').innerHTML = starRow(state._star); return; }
   if(act==='trend7'){ state.trendRange=7; setTrendSeg(); renderTrend(); return; }
   if(act==='trend30'){ state.trendRange=30; setTrendSeg(); renderTrend(); return; }
-  if(act==='due'){ state.dueOnly=!state.dueOnly; el.classList.toggle('on'); refreshAll(); return; }
+  if(act==='due'){ state.dueOnly=!state.dueOnly; el.classList.toggle('on'); if(state.dueOnly){ state.todayOnly=false; var tb=document.getElementById('todayBtn'); if(tb) tb.classList.remove('on'); } refreshAll(); return; }
+  if(act==='today'){ state.todayOnly=!state.todayOnly; el.classList.toggle('on'); if(state.todayOnly){ state.dueOnly=false; var db=document.getElementById('dueBtn'); if(db) db.classList.remove('on'); } refreshAll(); return; }
+  if(act==='imgview'){ openLightbox(el); return; }
+  if(act==='lbprev'){ if(state._lb){ state._lb.idx=(state._lb.idx-1+state._lb.srcs.length)%state._lb.srcs.length; renderLightbox(); } return; }
+  if(act==='lbnext'){ if(state._lb){ state._lb.idx=(state._lb.idx+1)%state._lb.srcs.length; renderLightbox(); } return; }
   if(act==='sub'){ state.curSub = el.getAttribute('data-sub'); refreshAll(); return; }
   if(act==='grade'){ state.gradeFilter = el.getAttribute('data-g')||''; refreshAll(); return; }
   if(act==='check'){ toggleMastered(el.closest('.q').getAttribute('data-id')); return; }
@@ -754,7 +1011,8 @@ function reviewResult(ok){
 function saveCard(){
   var content = document.getElementById('cContent').value.trim();
   var kp = document.getElementById('cKp').value.trim();
-  if(!content || !kp){ toast('题目和知识点为必填'); return; }
+  if(!kp){ toast('知识点为必填'); return; }
+  if(!content && state.pendingImages.length===0){ toast('请填写题目文字，或用「拍照/上传卷子框选」框出一张题目图片'); return; }
   var obj = {
     subject: document.getElementById('cSub').value,
     grade: document.getElementById('cGrade').value,
@@ -776,7 +1034,7 @@ function saveCard(){
 function delCard(id){
   var q = data.find(function(x){return x.id===id;}); if(!q) return;
   openModal('<div class="modal"><h3>删除确认</h3>'+
-    '<div style="color:var(--sub);margin-bottom:14px">确定删除这道错题吗？此操作不可撤销。<br><b>'+esc(q.content.slice(0,40))+'</b></div>'+
+    '<div style="color:var(--sub);margin-bottom:14px">确定删除这道错题吗？此操作不可撤销。<br><b>'+esc((q.content||'图片题').slice(0,40))+'</b></div>'+
     '<div class="modal-acts"><button class="btn btn-ghost" data-act="close">取消</button>'+
     '<button class="btn btn-primary" data-act="dodel" style="background:var(--red)">删除</button></div></div>');
   state._delId = id;
@@ -817,6 +1075,31 @@ function renderImgPrev(){
   var box = document.getElementById('imgPrev'); if(!box) return;
   box.innerHTML = state.pendingImages.map(function(s,i){ return '<div class="thumb"><img src="'+s+'"><button class="thumb-x" data-act="imgdel" data-i="'+i+'">×</button></div>'; }).join('');
 }
+
+/* 全屏看图（lightbox） */
+function openLightbox(imgEl){
+  var wrap = imgEl.closest('.q-imgs') || imgEl.parentElement;
+  var imgs = wrap ? Array.prototype.slice.call(wrap.querySelectorAll('img')) : [imgEl];
+  var srcs = imgs.map(function(im){ return im.getAttribute('src') || im.src; });
+  var idx = Math.max(0, imgs.indexOf(imgEl));
+  state._lb = { srcs: srcs, idx: idx };
+  renderLightbox();
+}
+function renderLightbox(){
+  var lb = state._lb; if(!lb) return;
+  var host = document.getElementById('lightboxHost');
+  if(!host) return;
+  var src = lb.srcs[lb.idx];
+  var multi = lb.srcs.length > 1;
+  host.innerHTML = '<div class="lb-mask" id="lbMask" data-act="lbclose">'+
+    (multi?'<button class="lb-nav lb-prev" data-act="lbprev" type="button">'+icon('chevL',20,'#fff')+'</button>':'')+
+    (multi?'<button class="lb-nav lb-next" data-act="lbnext" type="button">'+icon('chevR',20,'#fff')+'</button>':'')+
+    '<img class="lb-img" id="lbImg" src="'+src+'" alt="全屏看图">'+
+    '<button class="lb-x" data-act="lbclose" type="button">'+icon('x',20,'#fff')+'</button>'+
+    (multi?'<div class="lb-count">'+(lb.idx+1)+' / '+lb.srcs.length+'</div>':'')+
+    '</div>';
+}
+function lbClose(){ state._lb = null; var host = document.getElementById('lightboxHost'); if(host) host.innerHTML=''; }
 
 /* 数据导入导出 */
 function download(name, content, type){
@@ -899,6 +1182,8 @@ function init(){
     var el = e.target.closest('[data-act]'); if(!el) return;
     var act = el.getAttribute('data-act');
     if(act==='mask'){ if(e.target === el) closeModal(); return; } // 只有直接点遮罩背景本身才关，点弹窗内部（含空白）不关
+    if(act==='cropMask'){ if(e.target === el) restoreCard(); return; } // 框选弹窗点背景 = 取消并返回卡片
+    if(act==='lbclose'){ if(e.target.id==='lbImg') return; lbClose(); return; } // 点背景 / 关闭按钮关图，点图片本身不关
     if(act==='dodel'){ doDel(); return; }
     if(act==='doload'){ doLoadDemo(); return; }
     handleAct(act, el);
