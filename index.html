@@ -184,6 +184,14 @@ main{flex:1;min-width:0}
   .gifts{grid-template-columns:repeat(auto-fill,minmax(140px,1fr))}
   .row{flex-direction:column}
 }
+
+/* 积分分析弹窗图表 */
+.chart-card{background:var(--bg);border:1px solid var(--line);border-radius:var(--r-sm);padding:13px;margin-bottom:13px}
+.chart-card h4{font-size:14px;font-weight:800;margin-bottom:2px}
+.chart-card .cs{font-size:12px;color:var(--sub);margin-bottom:10px;line-height:1.5}
+.chart-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px}
+.chart-sum{font-size:12px;color:var(--muted);font-weight:700;margin-top:8px}
+.barsvg{display:block}
 </style>
 </head>
 <body>
@@ -204,7 +212,7 @@ main{flex:1;min-width:0}
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/><path d="M4 20c0-3.3 3.6-5 8-5s8 1.7 8 5"/></svg>
       <span id="nameTxt">宝贝</span>
     </button>
-    <div class="ptbox">
+    <div class="ptbox" data-act="points" title="点击查看积分分析" style="cursor:pointer">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg>
       <span id="ptTotal">0</span>
     </div>
@@ -533,6 +541,105 @@ function yesterdayLeft(){
   var y = shift(-1), t = today(), list = cardsForDate(y), out = [], i;
   for(i=0;i<list.length;i++){ if(!doneOn(list[i].id, y) && !doneOn(list[i].id, t)) out.push(list[i]); }
   return out;
+}
+
+/* ============ 积分分析：柱状图（纯计算，不调用任何渲染函数） ============ */
+function groupOf(rec){
+  var t = (rec.title||""), pid = (rec.pid||"");
+  if(/趣配音/.test(t)) return "英语趣配音";
+  if(/学霸卷|周末卷/.test(t)) return "课外练习";
+  if(/复习/.test(t)) return "基础复习";
+  if(/口算/.test(t)) return "口算";
+  if(/日记|周记|观后/.test(t)) return "日记";
+  if(/纪录片/.test(t)) return "纪录片";
+  if(/数独/.test(t)) return "数独";
+  if(/摘抄/.test(t)) return "素养加油站";
+  if(/一首词|学.*词|背.*词|默.*词/.test(t)) return "学一首词";
+  if(/整理/.test(t)) return "整理书与卧室";
+  if(/课外阅读/.test(t)) return "课外阅读";
+  if(/运动|跳绳|拉伸|体前屈|户外/.test(t)) return "运动";
+  if(pid==="cn"||pid==="ma"||pid==="en"||pid==="cnw"||pid==="maw"||pid==="enw") return "学校作业";
+  return (t || "其它");
+}
+function niceStep(max){
+  if(max <= 5) return 1;
+  if(max <= 10) return 2;
+  if(max <= 20) return 5;
+  if(max <= 50) return 10;
+  if(max <= 100) return 20;
+  if(max <= 200) return 50;
+  if(max <= 500) return 100;
+  if(max <= 1000) return 200;
+  return 500;
+}
+function dailyPoints(){
+  var end = today();
+  var endD = new Date(+end.substr(0,4), +end.substr(5,2)-1, +end.substr(8,2));
+  var d = new Date(2026, 8, 1), map = {}, i;
+  for(i=0;i<state.doneLog.length;i++){ var r=state.doneLog[i]; if(r.d >= "2026-09-01") map[r.d]=(map[r.d]||0)+(r.pts||0); }
+  var rows=[];
+  while(d <= endD){ var k=fmt(d); rows.push({label:k.substr(5), value:map[k]||0, full:k}); d.setDate(d.getDate()+1); }
+  return rows;
+}
+function projectTotals(){
+  var map={}, i;
+  for(i=0;i<state.doneLog.length;i++){
+    var r=state.doneLog[i];
+    if(r.d < "2026-09-01") continue;
+    var g=groupOf(r);
+    map[g]=(map[g]||0)+(r.pts||0);
+  }
+  var rows=[];
+  for(var k in map){ rows.push({label:k, value:map[k]}); }
+  rows.sort(function(a,b){ return b.value-a.value; });
+  return rows;
+}
+function barChartSvg(rows, opts){
+  opts = opts || {};
+  var n = rows.length;
+  if(n === 0) return '<div class="empty">还没有得分记录</div>';
+  var padL=34, padR=10, padT=14, padB=30, plotH=opts.plotH||180;
+  var barW=opts.barW||30, gap=opts.gap||8, color=opts.color||"#17B48E", labelRotate=!!opts.labelRotate;
+  var maxV=0, i;
+  for(i=0;i<n;i++){ if(rows[i].value>maxV) maxV=rows[i].value; }
+  if(maxV<=0) maxV=1;
+  var step=niceStep(maxV), top=Math.ceil(maxV/step)*step;
+  if(top<maxV) top=maxV;
+  var totalW=padL+n*(barW+gap)+padR, totalH=padT+plotH+padB;
+  var s='<svg class="barsvg" width="'+totalW+'" height="'+totalH+'" viewBox="0 0 '+totalW+' '+totalH+'" xmlns="http://www.w3.org/2000/svg">';
+  var gridN=4, g;
+  for(g=0; g<=gridN; g++){
+    var gy=padT+plotH-(plotH*g/gridN), gv=Math.round(top*g/gridN);
+    s+='<line x1="'+padL+'" y1="'+gy+'" x2="'+(totalW-padR)+'" y2="'+gy+'" stroke="#EEF3F1" stroke-width="1"/>';
+    s+='<text x="'+(padL-4)+'" y="'+(gy+3)+'" text-anchor="end" font-size="9" fill="#93A29D">'+gv+'</text>';
+  }
+  for(var j=0;j<n;j++){
+    var x=padL+j*(barW+gap), v=rows[j].value;
+    var bh=top>0?(v/top)*plotH:0; if(bh<0) bh=0;
+    var y=padT+plotH-bh, r=Math.min(4,barW/2);
+    s+='<rect x="'+x+'" y="'+y+'" width="'+barW+'" height="'+bh+'" rx="'+r+'" fill="'+color+'"/>';
+    if(v>0) s+='<text x="'+(x+barW/2)+'" y="'+(y-3)+'" text-anchor="middle" font-size="9" font-weight="700" fill="#25322E">'+v+'</text>';
+    var lx=x+barW/2, ly=padT+plotH+12;
+    if(labelRotate) s+='<text x="'+lx+'" y="'+ly+'" text-anchor="end" font-size="9" fill="#5C6B66" transform="rotate(-35 '+lx+' '+ly+')">'+esc(rows[j].label)+'</text>';
+    else s+='<text x="'+lx+'" y="'+ly+'" text-anchor="middle" font-size="9" fill="#5C6B66">'+esc(rows[j].label)+'</text>';
+  }
+  s+='</svg>';
+  return s;
+}
+function openPointsModal(){
+  var daily=dailyPoints(), proj=projectTotals(), i, td=0, tp=0;
+  for(i=0;i<daily.length;i++) td+=daily[i].value;
+  for(i=0;i<proj.length;i++) tp+=proj[i].value;
+  var html='<h3>'+icon("medal",19,"#FF9A3D")+'积分分析</h3>'
+    +'<div class="tip">统计自 9/1 开学以来，所有任务卡片完成得分（含周末项目）。</div>'
+    +'<div class="chart-card"><h4>① 每日得积分</h4><div class="cs">X 轴：日期（9/1 起）　Y 轴：当天得分</div>'
+    +'<div class="chart-scroll">'+barChartSvg(daily,{barW:26,gap:6,color:"#17B48E"})+'</div>'
+    +'<div class="chart-sum">区间累计：'+td+' 分（'+daily.length+' 天）</div></div>'
+    +'<div class="chart-card"><h4>② 各项目累计得分</h4><div class="cs">X 轴：合并后的项目名称　Y 轴：9/1 至今总分</div>'
+    +'<div class="chart-scroll">'+barChartSvg(proj,{barW:34,gap:10,color:"#FF9A3D",labelRotate:true})+'</div>'
+    +'<div class="chart-sum">项目合计：'+tp+' 分（'+proj.length+' 类）</div></div>'
+    +'<div class="modal-acts"><button class="btn ghost" data-act="close">关闭</button></div>';
+  openModal(html);
 }
 
 /* ============ 渲染层（彼此之间零互调，统一由 refreshAll 调度） ============ */
@@ -1162,6 +1269,7 @@ function handleAct(act, el, e){
   if(act === "opennav"){ openNav(); return; }
   if(act === "closenav"){ closeNav(); return; }
   if(act === "nav"){ view = el.getAttribute("data-view"); closeNav(); refreshAll(); return; }
+  if(act === "points"){ openPointsModal(); return; }
 
   if(act === "rename"){ view = "settings"; refreshAll(); return; }
   if(act === "namesave"){
