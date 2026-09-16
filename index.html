@@ -554,7 +554,7 @@ function groupOf(rec){
   if(/纪录片/.test(t)) return "纪录片";
   if(/数独/.test(t)) return "数独";
   if(/摘抄/.test(t)) return "素养加油站";
-  if(/一首词|学.*词|背.*词|默.*词/.test(t)) return "学一首词";
+  if(/一首词|学.*词|背.*词|默.*词/.test(t)) return "素养加油站";
   if(/整理/.test(t)) return "整理书与卧室";
   if(/课外阅读/.test(t)) return "课外阅读";
   if(/运动|跳绳|拉伸|体前屈|户外/.test(t)) return "运动";
@@ -572,25 +572,38 @@ function niceStep(max){
   if(max <= 1000) return 200;
   return 500;
 }
+var SCHOOL_START = "2026-09-01";   // 开学日（里程碑 day 映射基准）
+var CHART_START  = "2026-09-06";   // 图①每日起点
+function msDate(d){
+  var p = SCHOOL_START.split("-");
+  var dt = new Date(+p[0], +p[1]-1, +p[2]);
+  dt.setDate(dt.getDate() + (d-1));
+  return fmt(dt);
+}
+/* 统一积分流水：把页面右上角总积分的所有来源归集为 {date, group, pts} */
+function buildFlows(){
+  var flows=[], i, k;
+  for(i=0;i<state.doneLog.length;i++){ var r=state.doneLog[i]; flows.push({date:r.d||"", group:groupOf(r), pts:r.pts||0}); }
+  for(i=0;i<state.dictations.length;i++){ var d=state.dictations[i]; flows.push({date:d.d||"", group:"听写反馈", pts:d.pts||0}); }
+  for(k in state.checkins){ if(state.checkins[k]) flows.push({date:k, group:"每日打卡", pts:state.checkins[k].pts||0}); }
+  for(k in state.milestones){ var m=msByDay(+k); if(m) flows.push({date:msDate(+k), group:"里程碑奖励", pts:m.p||0}); }
+  for(i=0;i<state.redeems.length;i++){ var rd=state.redeems[i]; flows.push({date:rd.d||"", group:"兑换支出", pts:-(rd.cost||0)}); }
+  return flows;
+}
 function dailyPoints(){
   var end = today();
   var endD = new Date(+end.substr(0,4), +end.substr(5,2)-1, +end.substr(8,2));
-  var d = new Date(2026, 8, 1), map = {}, i;
-  for(i=0;i<state.doneLog.length;i++){ var r=state.doneLog[i]; if(r.d >= "2026-09-01") map[r.d]=(map[r.d]||0)+(r.pts||0); }
-  var rows=[];
-  while(d <= endD){ var k=fmt(d); rows.push({label:k.substr(5), value:map[k]||0, full:k}); d.setDate(d.getDate()+1); }
+  var map={}, i, fl=buildFlows();
+  for(i=0;i<fl.length;i++){ if(fl[i].date >= CHART_START && fl[i].date <= end) map[fl[i].date]=(map[fl[i].date]||0)+fl[i].pts; }
+  var d=new Date(2026,8,6), rows=[];
+  while(d<=endD){ var k=fmt(d); rows.push({label:k.substr(5), value:map[k]||0, full:k}); d.setDate(d.getDate()+1); }
   return rows;
 }
 function projectTotals(){
-  var map={}, i;
-  for(i=0;i<state.doneLog.length;i++){
-    var r=state.doneLog[i];
-    if(r.d < "2026-09-01") continue;
-    var g=groupOf(r);
-    map[g]=(map[g]||0)+(r.pts||0);
-  }
+  var map={}, i, fl=buildFlows();
+  for(i=0;i<fl.length;i++){ map[fl[i].group]=(map[fl[i].group]||0)+fl[i].pts; }
   var rows=[];
-  for(var k in map){ rows.push({label:k, value:map[k]}); }
+  for(var k in map){ if(map[k]!==0) rows.push({label:k, value:map[k]}); }
   rows.sort(function(a,b){ return b.value-a.value; });
   return rows;
 }
@@ -613,12 +626,15 @@ function barChartSvg(rows, opts){
     s+='<line x1="'+padL+'" y1="'+gy+'" x2="'+(totalW-padR)+'" y2="'+gy+'" stroke="#EEF3F1" stroke-width="1"/>';
     s+='<text x="'+(padL-4)+'" y="'+(gy+3)+'" text-anchor="end" font-size="9" fill="#93A29D">'+gv+'</text>';
   }
+  var y0=padT+plotH;
   for(var j=0;j<n;j++){
     var x=padL+j*(barW+gap), v=rows[j].value;
-    var bh=top>0?(v/top)*plotH:0; if(bh<0) bh=0;
-    var y=padT+plotH-bh, r=Math.min(4,barW/2);
-    s+='<rect x="'+x+'" y="'+y+'" width="'+barW+'" height="'+bh+'" rx="'+r+'" fill="'+color+'"/>';
-    if(v>0) s+='<text x="'+(x+barW/2)+'" y="'+(y-3)+'" text-anchor="middle" font-size="9" font-weight="700" fill="#25322E">'+v+'</text>';
+    var bh=top>0?Math.abs(v)/top*plotH:0;
+    var y=(v>=0)?(y0-bh):y0, r=Math.min(4,barW/2);
+    var bcol=(v<0)?"#E2554B":color;
+    s+='<rect x="'+x+'" y="'+y+'" width="'+barW+'" height="'+bh+'" rx="'+r+'" fill="'+bcol+'"/>';
+    var ty=(v>=0)?(y-3):(y+bh+9);
+    s+='<text x="'+(x+barW/2)+'" y="'+ty+'" text-anchor="middle" font-size="9" font-weight="700" fill="#25322E">'+v+'</text>';
     var lx=x+barW/2, ly=padT+plotH+12;
     if(labelRotate) s+='<text x="'+lx+'" y="'+ly+'" text-anchor="end" font-size="9" fill="#5C6B66" transform="rotate(-35 '+lx+' '+ly+')">'+esc(rows[j].label)+'</text>';
     else s+='<text x="'+lx+'" y="'+ly+'" text-anchor="middle" font-size="9" fill="#5C6B66">'+esc(rows[j].label)+'</text>';
@@ -631,13 +647,13 @@ function openPointsModal(){
   for(i=0;i<daily.length;i++) td+=daily[i].value;
   for(i=0;i<proj.length;i++) tp+=proj[i].value;
   var html='<h3>'+icon("medal",19,"#FF9A3D")+'积分分析</h3>'
-    +'<div class="tip">统计自 9/1 开学以来，所有任务卡片完成得分（含周末项目）。</div>'
-    +'<div class="chart-card"><h4>① 每日得积分</h4><div class="cs">X 轴：日期（9/1 起）　Y 轴：当天得分</div>'
+    +'<div class="tip">统计自 9/6 起的全部积分来源：任务卡打卡 + 听写反馈 + 每日打卡 + 里程碑奖励（已扣除兑换）。两图合计与右上角总积分一致。</div>'
+    +'<div class="chart-card"><h4>① 每日得积分</h4><div class="cs">X 轴：日期（9/6 起）　Y 轴：当天得分</div>'
     +'<div class="chart-scroll">'+barChartSvg(daily,{barW:26,gap:6,color:"#17B48E"})+'</div>'
-    +'<div class="chart-sum">区间累计：'+td+' 分（'+daily.length+' 天）</div></div>'
-    +'<div class="chart-card"><h4>② 各项目累计得分</h4><div class="cs">X 轴：合并后的项目名称　Y 轴：9/1 至今总分</div>'
+    +'<div class="chart-sum">区间累计（9/6 起）：'+td+' 分（'+daily.length+' 天）</div></div>'
+    +'<div class="chart-card"><h4>② 各来源累计得分</h4><div class="cs">X 轴：合并后的项目/来源　Y 轴：9/1 至今总分</div>'
     +'<div class="chart-scroll">'+barChartSvg(proj,{barW:34,gap:10,color:"#FF9A3D",labelRotate:true})+'</div>'
-    +'<div class="chart-sum">项目合计：'+tp+' 分（'+proj.length+' 类）</div></div>'
+    +'<div class="chart-sum">来源合计：'+tp+' 分（与右上角总积分一致）</div></div>'
     +'<div class="modal-acts"><button class="btn ghost" data-act="close">关闭</button></div>';
   openModal(html);
 }
