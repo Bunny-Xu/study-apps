@@ -102,6 +102,8 @@
 
   .img-drop{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px;border:1px dashed var(--line);border-radius:10px;background:var(--bg)}
   .img-prev{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  .ans-img-bar{margin:6px 0 2px}
+  .ans-img-prev{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
   .thumb{position:relative;width:70px;height:70px;border-radius:8px;overflow:hidden;border:1px solid var(--line)}
   .thumb img{width:100%;height:100%;object-fit:cover}
   .thumb-x{position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;background:rgba(0,0,0,.6);color:#fff;border:none;font-size:12px;line-height:1;padding:0;cursor:pointer}
@@ -357,7 +359,7 @@ var GRADES = ['小学五年级'];
 var data = [];
 var trend = [];
 var state = { curSub:'全部', gradeFilter:'', kw:'', fKp:'', fStatus:'', dueOnly:false, todayOnly:false, trendRange:7,
-  editingId:null, pendingImages:[], reviewId:null, calDate:null, calSel:null, modal:'none', _lb:null };
+  editingId:null, pendingImages:[], ansImgs:{wrong:[],right:[],reason:[]}, _ansSlot:null, reviewId:null, calDate:null, calSel:null, modal:'none', _lb:null };
 
 function load(){
   try{
@@ -513,6 +515,14 @@ function starRow(n){
   for(var i=1;i<=5;i++){ s += '<span class="st" data-act="setstar" data-n="'+i+'">'+icon('star',16, i<=n?'#f5b50a':'#d9dde6')+'</span>'; }
   return s;
 }
+function ansImgsHtml(arr){
+  if(!arr || !arr.length) return '';
+  return '<div class="q-imgs" style="margin:6px 0">'+arr.map(function(s){return '<img src="'+s+'" data-act="imgview" alt="答案图">';}).join('')+'</div>';
+}
+function ansImgsPrintHtml(arr){
+  if(!arr || !arr.length) return '';
+  return '<div style="margin:6px 0">'+arr.map(function(s){ return '<img src="'+s+'" style="max-width:240px;max-height:300px;margin:0 8px 6px 0;border:1px solid #eee;border-radius:6px;vertical-align:top;object-fit:contain">'; }).join('')+'</div>';
+}
 function qHtml(q){
   var imgs = (q.images&&q.images.length) ? '<div class="q-imgs">'+q.images.map(function(s){return '<img src="'+s+'" data-act="imgview" alt="题图">';}).join('')+'</div>' : '';
   var chips = '<span class="chip kp">'+esc(q.knowledge||'未分类')+'</span>'+
@@ -531,9 +541,9 @@ function qHtml(q){
       '<div class="q-actions"><button class="mini" data-act="edit">编辑</button><button class="mini del" data-act="del">删除</button></div>'+
     '</div>'+
     '<div class="q-detail" id="d-'+q.id+'">'+imgs+
-      '<div class="row"><div class="lab">我的错误答案</div><div class="val ans-wrong">'+esc(q.wrong||'（未填写）')+'</div></div>'+
-      '<div class="row"><div class="lab">正确答案</div><div class="val ans-right">'+esc(q.right||'（未填写）')+'</div></div>'+
-      '<div class="row"><div class="lab">错因分析</div><div class="val">'+esc(q.reason||'（未填写）')+'</div></div>'+
+      '<div class="row"><div class="lab">我的错误答案</div><div class="val ans-wrong">'+esc(q.wrong||'（未填写）')+'</div></div>'+ansImgsHtml(q.wrongImages)+
+      '<div class="row"><div class="lab">正确答案</div><div class="val ans-right">'+esc(q.right||'（未填写）')+'</div></div>'+ansImgsHtml(q.rightImages)+
+      '<div class="row"><div class="lab">错因分析</div><div class="val">'+esc(q.reason||'（未填写）')+'</div></div>'+ansImgsHtml(q.reasonImages)+
       '<div class="row"><div class="lab">下次复习</div><div class="val">'+(q.nextReview?fmtDate(q.nextReview):'—')+'</div></div>'+
     '</div></div>';
 }
@@ -555,6 +565,7 @@ function askCard(id, draft){
   state.editingId = id;
   var src = draft || q || {};
   state.pendingImages = src.images ? src.images.slice() : (q ? (q.images||[]).slice() : []);
+  state.ansImgs = { wrong:(src.wrongImages||[]).slice(), right:(src.rightImages||[]).slice(), reason:(src.reasonImages||[]).slice() };
   var sub = src.subject || (q?q.subject:(state.curSub!=='全部'?state.curSub:SUBJECTS[0]));
   var diff = src.difficulty || (q?q.difficulty:3);
   state._star = diff;
@@ -570,9 +581,17 @@ function askCard(id, draft){
     '<div class="field"><label>快速录入：拍照 / 上传卷子框选</label>'+
       '<div class="img-drop"><button class="btn-soft iconbtn" type="button" data-act="cropOpen">'+icon('abc',15)+'拍照/上传卷子截图，框选题目自动识别</button>'+
       '<span style="font-size:12px;color:var(--sub)">不用手打题目：上传整张卷子，框出题目区域即可自动抠图——直接用图片当题目，或识别成文字</span></div></div>'+
-    '<div class="row2"><div class="field"><label>我的错误答案</label><textarea id="cWrong" placeholder="当时写的错答">'+esc(src.wrong||'')+'</textarea></div>'+
-    '<div class="field"><label>正确答案</label><textarea id="cRight" placeholder="标准答案 / 正确解法">'+esc(src.right||'')+'</textarea></div></div>'+
-    '<div class="field"><label>错因分析</label><textarea id="cReason" placeholder="为什么错？概念不清 / 计算失误 / 审题偏差 …">'+esc(src.reason||'')+'</textarea></div>'+
+    '<div class="row2"><div class="field"><label>我的错误答案（可传图）</label><textarea id="cWrong" placeholder="当时写的错答">'+esc(src.wrong||'')+'</textarea>'+
+      '<div class="ans-img-bar"><button class="btn-ghost iconbtn" type="button" data-act="ansimgpick" data-slot="wrong">'+icon('upload',14)+'添加图片</button></div>'+
+      '<div class="ans-img-prev" id="ansPrev_wrong"></div></div>'+
+    '<div class="field"><label>正确答案（可传图）</label><textarea id="cRight" placeholder="标准答案 / 正确解法">'+esc(src.right||'')+'</textarea>'+
+      '<div class="ans-img-bar"><button class="btn-ghost iconbtn" type="button" data-act="ansimgpick" data-slot="right">'+icon('upload',14)+'添加图片</button></div>'+
+      '<div class="ans-img-prev" id="ansPrev_right"></div></div></div>'+
+    '<div class="field"><label>错因分析（可传图）</label><textarea id="cReason" placeholder="为什么错？概念不清 / 计算失误 / 审题偏差 …">'+esc(src.reason||'')+'</textarea>'+
+      '<div class="ans-img-bar"><button class="btn-ghost iconbtn" type="button" data-act="ansimgpick" data-slot="reason">'+icon('upload',14)+'添加图片</button></div>'+
+      '<div class="ans-img-prev" id="ansPrev_reason"></div></div>'+
+    '<input id="ansImgInput" type="file" accept="image/*" multiple style="display:none">'+
+
     '<div class="row2"><div class="field"><label>知识点 <span class="req">*</span></label><input id="cKp" type="text" placeholder="如：分数加减 / 定语从句" value="'+esc(src.knowledge||'')+'"></div>'+
     '<div class="field"><label>学生（可选）</label><input id="cStu" type="text" placeholder="留空表示通用" value="'+esc(src.student||'')+'"></div></div>'+
     '<div class="field"><label>难度</label><div class="star-row" id="starRow">'+starRow(diff)+'</div></div>'+
@@ -587,6 +606,8 @@ function askCard(id, draft){
   openModal(html);
   state.modal = 'card';
   document.getElementById('cImg').addEventListener('change', onImgPick);
+  document.getElementById('ansImgInput').addEventListener('change', onAnsImgPick);
+  ['wrong','right','reason'].forEach(function(slot){ renderAnsImgPrev(slot); });
 }
 
 function openReview(){
@@ -601,9 +622,9 @@ function openReview(){
       (q.student?'<span class="chip">'+esc(q.student)+'</span>':'')+'</div>'+
     (q.images&&q.images.length?'<div class="q-imgs" style="margin:10px 0">'+q.images.map(function(s){return '<img src="'+s+'" data-act="imgview" alt="题图">';}).join('')+'</div>':'')+
     '<div class="rev-ans" id="revAns">'+
-      '<div class="lab" style="font-size:12px;color:var(--sub);font-weight:700">我的错误答案</div><div class="v ans-wrong">'+esc(q.wrong||'（未填写）')+'</div>'+
-      '<div class="lab" style="font-size:12px;color:var(--sub);font-weight:700;margin-top:10px">正确答案</div><div class="v ans-right">'+esc(q.right||'（未填写）')+'</div>'+
-      (q.reason?'<div class="lab" style="font-size:12px;color:var(--sub);font-weight:700;margin-top:10px">错因分析</div><div class="v">'+esc(q.reason)+'</div>':'')+
+      '<div class="lab" style="font-size:12px;color:var(--sub);font-weight:700">我的错误答案</div><div class="v ans-wrong">'+esc(q.wrong||'（未填写）')+'</div>'+ansImgsHtml(q.wrongImages)+
+      '<div class="lab" style="font-size:12px;color:var(--sub);font-weight:700;margin-top:10px">正确答案</div><div class="v ans-right">'+esc(q.right||'（未填写）')+'</div>'+ansImgsHtml(q.rightImages)+
+      (q.reason?'<div class="lab" style="font-size:12px;color:var(--sub);font-weight:700;margin-top:10px">错因分析</div><div class="v">'+esc(q.reason)+'</div>'+ansImgsHtml(q.reasonImages):'')+
     '</div>'+
     '<button class="btn btn-ghost" id="revShow" style="width:100%" data-act="revshow">看答案</button>'+
     '<div class="rev-btns" id="revBtns"><button class="rb-ok" data-act="revok">我答对了</button>'+
@@ -713,9 +734,9 @@ function doPrint(){
     return '<h3 style="margin:14px 0 6px;font-size:15px">'+esc(k)+'（'+groups[k].length+' 题）</h3>'+
       groups[k].map(function(q){
         var ans = hide ? '' :
-          (q.wrong?'<div style="color:#e5484d;margin:3px 0"><b>我的错答：</b>'+esc(q.wrong)+'</div>':'')+
-          (q.right?'<div style="color:#2f9e6b;margin:3px 0"><b>正解：</b>'+esc(q.right)+'</div>':'')+
-          (q.reason?'<div style="margin:3px 0"><b>错因：</b>'+esc(q.reason)+'</div>':'');
+          (q.wrong?'<div style="color:#e5484d;margin:3px 0"><b>我的错答：</b>'+esc(q.wrong)+'</div>':'')+ansImgsPrintHtml(q.wrongImages)+
+          (q.right?'<div style="color:#2f9e6b;margin:3px 0"><b>正解：</b>'+esc(q.right)+'</div>':'')+ansImgsPrintHtml(q.rightImages)+
+          (q.reason?'<div style="margin:3px 0"><b>错因：</b>'+esc(q.reason)+'</div>':'')+ansImgsPrintHtml(q.reasonImages);
       var pimgs = (q.images&&q.images.length) ? '<div style="margin:6px 0">'+q.images.map(function(s){ return '<img src="'+s+'" style="max-width:240px;max-height:300px;margin:0 8px 6px 0;border:1px solid #eee;border-radius:6px;vertical-align:top;object-fit:contain">'; }).join('')+'</div>' : '';
       return '<div style="border:1px solid #ccc;border-radius:8px;padding:10px;margin-bottom:8px;break-inside:avoid">'+
         '<div style="font-weight:700">'+(q.content?esc(q.content):'（图片题）')+'</div>'+
@@ -744,13 +765,16 @@ function readCardForm(){
     knowledge: document.getElementById('cKp').value,
     student: document.getElementById('cStu').value,
     difficulty: state._star || 3,
-    images: state.pendingImages.slice()
+    images: state.pendingImages.slice(),
+    wrongImages: state.ansImgs.wrong.slice(),
+    rightImages: state.ansImgs.right.slice(),
+    reasonImages: state.ansImgs.reason.slice()
   };
 }
 function restoreCard(){ askCard(state.editingId, state._cardDraft); }
 
 function openCrop(){
-  state._cardDraft = readCardForm() || { subject:'', grade:'', content:'', wrong:'', right:'', reason:'', knowledge:'', student:'', difficulty: state._star||3, images: state.pendingImages.slice() };
+  state._cardDraft = readCardForm() || { subject:'', grade:'', content:'', wrong:'', right:'', reason:'', knowledge:'', student:'', difficulty: state._star||3, images: state.pendingImages.slice(), wrongImages: state.ansImgs.wrong.slice(), rightImages: state.ansImgs.right.slice(), reasonImages: state.ansImgs.reason.slice() };
   state.modal = 'crop';
   var html = '<div class="modal" style="max-width:720px">'+
     '<h3>'+icon('abc',18,'var(--brand)')+'框选题目（拍照 / 上传卷子）</h3>'+
@@ -968,6 +992,8 @@ function handleAct(act, el){
   if(act==='cropFill'){ cropFill(); return; }
   if(act==='cropCancel'){ restoreCard(); return; }
   if(act==='imgdel'){ state.pendingImages.splice(parseInt(el.getAttribute('data-i'),10),1); renderImgPrev(); return; }
+  if(act==='ansimgpick'){ state._ansSlot = el.getAttribute('data-slot'); document.getElementById('ansImgInput').click(); return; }
+  if(act==='ansimgdel'){ var as=el.getAttribute('data-slot'), ai=parseInt(el.getAttribute('data-i'),10); if(state.ansImgs[as]){ state.ansImgs[as].splice(ai,1); renderAnsImgPrev(as); } return; }
   if(act==='setstar'){ state._star = parseInt(el.getAttribute('data-n'),10); document.getElementById('starRow').innerHTML = starRow(state._star); return; }
   if(act==='trend7'){ state.trendRange=7; setTrendSeg(); renderTrend(); return; }
   if(act==='trend30'){ state.trendRange=30; setTrendSeg(); renderTrend(); return; }
@@ -1019,7 +1045,8 @@ function saveCard(){
     content: content, wrong: document.getElementById('cWrong').value.trim(),
     right: document.getElementById('cRight').value.trim(), reason: document.getElementById('cReason').value.trim(),
     knowledge: kp, student: document.getElementById('cStu').value.trim(),
-    difficulty: state._star||3, images: state.pendingImages.slice()
+    difficulty: state._star||3, images: state.pendingImages.slice(),
+    wrongImages: state.ansImgs.wrong.slice(), rightImages: state.ansImgs.right.slice(), reasonImages: state.ansImgs.reason.slice()
   };
   if(state.editingId){
     var q = data.find(function(x){return x.id===state.editingId;});
@@ -1074,6 +1101,22 @@ function onImgPick(e){
 function renderImgPrev(){
   var box = document.getElementById('imgPrev'); if(!box) return;
   box.innerHTML = state.pendingImages.map(function(s,i){ return '<div class="thumb"><img src="'+s+'"><button class="thumb-x" data-act="imgdel" data-i="'+i+'">×</button></div>'; }).join('');
+}
+function onAnsImgPick(e){
+  var slot = state._ansSlot; if(!slot) return;
+  var files = e.target.files; if(!files.length) return;
+  var n = files.length, done = 0;
+  Array.prototype.forEach.call(files, function(f){
+    compressImg(f, function(b64){
+      if(state.ansImgs[slot].length < 9) state.ansImgs[slot].push(b64);
+      done++; if(done===n) renderAnsImgPrev(slot);
+    });
+  });
+  e.target.value = '';
+}
+function renderAnsImgPrev(slot){
+  var box = document.getElementById('ansPrev_'+slot); if(!box) return;
+  box.innerHTML = state.ansImgs[slot].map(function(s,i){ return '<div class="thumb"><img src="'+s+'"><button class="thumb-x" data-act="ansimgdel" data-slot="'+slot+'" data-i="'+i+'">×</button></div>'; }).join('');
 }
 
 /* 全屏看图（lightbox） */
